@@ -38,14 +38,14 @@
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-// Shows the warning HUD on the screen so you can check the look, position and timing.
+// Shows the small tick indicator so you can check the look, position and timing.
 - (void)testHUD {
     notify_post(NS_NOTIFY_TESTHUD);
 }
 
 - (void)resetDefaults {
     NSArray *keys = @[@"enabled", @"threshold", @"gaming", @"hudPosition", @"hudDuration",
-                      @"warnMemory", @"closeApps", @"pauseDaemons"];
+                      @"warnMemory", @"closeApps", @"pauseDaemons", @"showIndicator"];
     for (NSString *key in keys) {
         CFPreferencesSetAppValue((__bridge CFStringRef)key, NULL, NS_DOMAIN);
     }

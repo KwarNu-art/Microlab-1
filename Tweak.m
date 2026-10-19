@@ -1,12 +1,13 @@
 // NovaShield: performance and thermal rescue for SpringBoard (rootless, iOS 15+).
 //
 // What it does, in short:
-//  * While the screen is ON it samples CPU load, memory use and the system thermal state every 2.5 s.
+//  * While the screen is ON it checks CPU load, memory use and thermal state every 5 s (every 10 s while all is calm).
 //  * While the screen is OFF it runs nothing at all: the timer is cancelled, nothing is scheduled, and
 //    anything NovaShield paused is resumed first. Standby battery is not touched.
-//  * When the load stays too high (or the phone gets hot) a floating glass HUD offers "Boost & Cool".
-//  * Boost & Cool clears memory caches, closes safe background apps, pauses background analysis daemons
-//    for a while, and tries to raise the foreground app's priority.
+//  * When the load stays too high (or the phone gets hot) it runs Boost & Cool by itself: it clears memory
+//    caches, closes safe background apps and pauses background analysis daemons for a while.
+//  * Only after a boost that really changed something, a tiny glass pill with green ticks shows the proof
+//    for a couple of seconds. There are no buttons, dialogs or taps.
 //
 // Honest limits (iOS sandboxing): SpringBoard runs as the "mobile" user, so NovaShield can only pause
 // daemons owned by mobile, never root daemons such as thermalmonitord, and it cannot change kernel
@@ -36,12 +37,12 @@
 #define NV_NOTIFY_RESPRING "com.kwarnu.novashield/respring"
 #define NV_NOTIFY_BLANKED "com.apple.springboard.hasBlankedScreen"
 
-static const NSTimeInterval kPollInterval = 2.5;     // seconds between samples while the screen is on
-static const int kOverChecksNeeded = 3;              // consecutive high samples before the HUD appears
-static const int kCalmChecksNeeded = 2;              // consecutive calm samples before it goes away
+static const NSTimeInterval kPollFast = 5.0;         // seconds between samples while the load is high or unsettled
+static const NSTimeInterval kPollSlow = 10.0;        // seconds between samples once everything has been calm
+static const int kCalmChecksForSlow = 6;             // calm samples in a row before sampling slows down
+static const int kOverChecksNeeded = 2;              // consecutive high samples before an automatic boost
 static const double kMemoryLimit = 92.0;             // memory saturation (%) that counts as "high"
-static const NSTimeInterval kHUDCooldown = 45.0;     // quiet time after the HUD is dismissed
-static const NSTimeInterval kBoostCooldown = 25.0;   // quiet time after a Boost & Cool
+static const NSTimeInterval kBoostCooldown = 90.0;   // an automatic boost runs at most this often
 static const NSTimeInterval kFreezeSeconds = 90.0;   // how long paused daemons stay paused per boost
 static const NSTimeInterval kGamingBoostDelay = 5.0; // wait after a game opens so it can finish loading
 
@@ -52,14 +53,15 @@ typedef struct {
     double threshold;      // CPU warning threshold, percent
     BOOL gaming;           // auto boost for games and calls
     NSInteger hudPosition; // 0 = top, 1 = bottom
-    double hudDuration;    // seconds the HUD stays if the load does not settle
+    double hudDuration;    // seconds the tick indicator stays on screen
+    BOOL showIndicator;    // show the small tick indicator after an automatic boost
     BOOL warnMemory;
     BOOL closeApps;
     BOOL pauseDaemons;
 } NVConfig;
 
 static NVConfig cfg = {
-    .enabled = YES, .threshold = 80, .gaming = YES, .hudPosition = 0, .hudDuration = 8,
+    .enabled = YES, .threshold = 80, .gaming = YES, .hudPosition = 0, .hudDuration = 2.5, .showIndicator = YES,
     .warnMemory = YES, .closeApps = YES, .pauseDaemons = YES,
 };
 
@@ -86,7 +88,8 @@ static void NVLoadConfig(void) {
     cfg.threshold = NVNumberPref(@"threshold", 80, 60, 95);
     cfg.gaming = NVBoolPref(@"gaming", YES);
     cfg.hudPosition = (NSInteger)NVNumberPref(@"hudPosition", 0, 0, 1);
-    cfg.hudDuration = NVNumberPref(@"hudDuration", 8, 3, 30);
+    cfg.hudDuration = NVNumberPref(@"hudDuration", 2.5, 1.5, 6);
+    cfg.showIndicator = NVBoolPref(@"showIndicator", YES);
     cfg.warnMemory = NVBoolPref(@"warnMemory", YES);
     cfg.closeApps = NVBoolPref(@"closeApps", YES);
     cfg.pauseDaemons = NVBoolPref(@"pauseDaemons", YES);
@@ -364,11 +367,18 @@ static BOOL NVRaiseForegroundPriority(void) {
 
 static BOOL gBoosting;   // main thread
 
-// Runs the whole rescue. The completion block runs on the main thread with a short summary.
-static void NVBoostAndCool(void (^completion)(NSString *summary)) {
-    if (gBoosting) { if (completion) completion(@"Already working"); return; }
+typedef struct {
+    double memBefore, memAfter;   // memory saturation (%) around the boost, -1 if unknown
+    int closed, paused;
+    BOOL raised;
+} NVBoostResult;
+
+// Runs the whole rescue on its own. The completion block runs on the main thread with what really happened.
+static void NVBoostAndCool(void (^completion)(NVBoostResult result)) {
+    if (gBoosting) return;
     gBoosting = YES;
 
+    double before = NVMemorySaturation();
     NVPurgeMemory();
     int closed = cfg.closeApps ? NVCloseBackgroundApps() : 0;
     BOOL raised = NVRaiseForegroundPriority();
@@ -376,301 +386,206 @@ static void NVBoostAndCool(void (^completion)(NSString *summary)) {
 
     dispatch_async(gQueue, ^{
         int paused = pause ? NVPauseDaemons() : 0;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            NSMutableArray *parts = [NSMutableArray arrayWithObject:@"Memory cleared"];
-            if (closed) [parts addObject:[NSString stringWithFormat:@"%d app%@ closed", closed, closed == 1 ? @"" : @"s"]];
-            if (paused) [parts addObject:[NSString stringWithFormat:@"%d daemon%@ paused", paused, paused == 1 ? @"" : @"s"]];
-            if (raised) [parts addObject:@"priority raised"];
-            gBoosting = NO;
-            if (completion) completion([parts componentsJoinedByString:@" · "]);
+        // Give the system a moment to hand the memory back, then measure for the proof.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), gQueue, ^{
+            double after = NVMemorySaturation();
+            dispatch_async(dispatch_get_main_queue(), ^{
+                gBoosting = NO;
+                NVBoostResult r = { before, after, closed, paused, raised };
+                if (completion) completion(r);
+            });
         });
     });
 }
 
-#pragma mark - HUD
+#pragma mark - Tick indicator (small, passive, never asks for a tap)
 
-@interface NVHUDWindow : UIWindow
+@interface NVIndicatorWindow : UIWindow
 @end
 
-@implementation NVHUDWindow
-// Only the HUD card takes touches; everything else falls through to the app underneath.
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    UIView *view = [super hitTest:point withEvent:event];
-    if (view == self || view == self.rootViewController.view) return nil;
-    return view;
-}
+@implementation NVIndicatorWindow
+// Completely transparent to touches: it can never get in the way of an app.
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event { return nil; }
 @end
 
-@interface NVHUD : NSObject
-@property (nonatomic, strong) NVHUDWindow *window;
-@property (nonatomic, strong) UIView *card;
-@property (nonatomic, strong) UIImageView *icon;
-@property (nonatomic, strong) UILabel *titleLabel;
-@property (nonatomic, strong) UILabel *detailLabel;
-@property (nonatomic, strong) UIButton *button;
-@property (nonatomic) NSInteger orientation;
+@interface NVIndicator : NSObject
+@property (nonatomic, strong) NVIndicatorWindow *window;
+@property (nonatomic, strong) UIView *pill;
 @property (nonatomic) NSUInteger generation;
 @property (nonatomic) BOOL visible;
-@property (nonatomic) CGAffineTransform baseTransform;
 + (instancetype)shared;
-- (void)showWithCPU:(double)cpu memory:(double)mem thermal:(NSInteger)thermal;
-- (void)updateWithCPU:(double)cpu memory:(double)mem thermal:(NSInteger)thermal;
-- (void)dismissAnimated:(BOOL)animated;
-- (void)followOrientation;
+- (void)showItems:(NSArray<NSString *> *)items;
+- (void)hideAnimated:(BOOL)animated;
 @end
 
-static CFTimeInterval gCooldownUntil;   // main thread
-
-@implementation NVHUD
+@implementation NVIndicator
 
 + (instancetype)shared {
-    static NVHUD *hud;
+    static NVIndicator *indicator;
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ hud = [[NVHUD alloc] init]; });
-    return hud;
+    dispatch_once(&once, ^{ indicator = [[NVIndicator alloc] init]; });
+    return indicator;
 }
 
-- (void)buildWindow {
+// Green ticks followed by what was done, e.g. "✓ RAM 93→88%  ✓ 2 apps closed".
+- (NSAttributedString *)textForItems:(NSArray<NSString *> *)items {
+    NSMutableAttributedString *text = [[NSMutableAttributedString alloc] init];
+    UIFont *font = [UIFont monospacedDigitSystemFontOfSize:11.5 weight:UIFontWeightSemibold];
+    NSDictionary *tick = @{NSFontAttributeName: font, NSForegroundColorAttributeName: UIColor.systemGreenColor};
+    NSDictionary *body = @{NSFontAttributeName: font, NSForegroundColorAttributeName: UIColor.labelColor};
+    for (NSUInteger i = 0; i < items.count; i++) {
+        if (i) [text appendAttributedString:[[NSAttributedString alloc] initWithString:@"   " attributes:body]];
+        [text appendAttributedString:[[NSAttributedString alloc] initWithString:@"✓ " attributes:tick]];
+        [text appendAttributedString:[[NSAttributedString alloc] initWithString:items[i] attributes:body]];
+    }
+    return text;
+}
+
+- (void)showItems:(NSArray<NSString *> *)items {
+    if (!items.count || !cfg.showIndicator) return;
+    [self hideAnimated:NO];
+
     CGRect screen = UIScreen.mainScreen.bounds;
-    NVHUDWindow *window = [[NVHUDWindow alloc] initWithFrame:screen];
+    CGFloat W = screen.size.width, H = screen.size.height;
+
+    NVIndicatorWindow *window = [[NVIndicatorWindow alloc] initWithFrame:screen];
     window.windowLevel = 10000000;
     window.backgroundColor = UIColor.clearColor;
+    window.userInteractionEnabled = NO;
     UIViewController *root = [[UIViewController alloc] init];
     root.view.backgroundColor = UIColor.clearColor;
     window.rootViewController = root;
     SEL secure = NSSelectorFromString(@"_setSecure:");
     if ([window respondsToSelector:secure]) ((void (*)(id, SEL, BOOL))objc_msgSend)(window, secure, YES);
-    self.window = window;
 
-    UIView *card = [[UIView alloc] initWithFrame:CGRectZero];
-    card.layer.shadowColor = UIColor.blackColor.CGColor;
-    card.layer.shadowOpacity = 0.28;
-    card.layer.shadowRadius = 20;
-    card.layer.shadowOffset = CGSizeMake(0, 8);
-    [root.view addSubview:card];
-    self.card = card;
+    UILabel *label = [[UILabel alloc] init];
+    label.attributedText = [self textForItems:items];
+    label.numberOfLines = 1;
+    [label sizeToFit];
+
+    CGFloat h = 28;
+    CGFloat w = MIN(label.bounds.size.width + 26, MAX(120, MAX(W, H) - 24));
+    label.frame = CGRectMake(13, (h - label.bounds.size.height) / 2, w - 26, label.bounds.size.height);
+    label.adjustsFontSizeToFitWidth = YES;
+    label.minimumScaleFactor = 0.7;
+
+    // Liquid glass: a very thin blur with a soft light edge and a faint highlight, no solid background.
+    UIView *pill = [[UIView alloc] initWithFrame:CGRectMake(0, 0, w, h)];
+    pill.layer.shadowColor = UIColor.blackColor.CGColor;
+    pill.layer.shadowOpacity = 0.14;
+    pill.layer.shadowRadius = 10;
+    pill.layer.shadowOffset = CGSizeMake(0, 4);
+    pill.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:pill.bounds cornerRadius:h / 2].CGPath;
 
     UIVisualEffectView *glass = [[UIVisualEffectView alloc]
-        initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial]];
-    glass.layer.cornerRadius = 22;
+        initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterial]];
+    glass.frame = pill.bounds;
+    glass.layer.cornerRadius = h / 2;
     glass.layer.cornerCurve = kCACornerCurveContinuous;
     glass.layer.masksToBounds = YES;
-    glass.layer.borderWidth = 0.5;
-    glass.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.25].CGColor;
-    glass.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [card addSubview:glass];
+    glass.layer.borderWidth = 0.6;
+    glass.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.38].CGColor;
+    [pill addSubview:glass];
 
-    UIImageView *icon = [[UIImageView alloc] initWithFrame:CGRectMake(16, 13, 28, 28)];
-    icon.contentMode = UIViewContentModeScaleAspectFit;
-    [glass.contentView addSubview:icon];
-    self.icon = icon;
+    CAGradientLayer *sheen = [CAGradientLayer layer];
+    sheen.frame = glass.bounds;
+    sheen.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.30].CGColor,
+                     (id)[UIColor colorWithWhite:1 alpha:0.03].CGColor,
+                     (id)[UIColor colorWithWhite:1 alpha:0.12].CGColor];
+    sheen.startPoint = CGPointMake(0, 0);
+    sheen.endPoint = CGPointMake(1, 1);
+    [glass.contentView.layer addSublayer:sheen];
+    [glass.contentView addSubview:label];
 
-    UILabel *title = [[UILabel alloc] init];
-    title.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
-    title.textColor = UIColor.labelColor;
-    title.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [glass.contentView addSubview:title];
-    self.titleLabel = title;
+    [root.view addSubview:pill];
+    self.window = window;
+    self.pill = pill;
 
-    UILabel *detail = [[UILabel alloc] init];
-    detail.font = [UIFont monospacedDigitSystemFontOfSize:12.5 weight:UIFontWeightMedium];
-    detail.textColor = UIColor.secondaryLabelColor;
-    detail.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [glass.contentView addSubview:detail];
-    self.detailLabel = detail;
-
-    UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-    button.backgroundColor = [UIColor colorWithRed:0.33 green:0.42 blue:1.0 alpha:1.0];
-    button.layer.cornerRadius = 11;
-    button.layer.cornerCurve = kCACornerCurveContinuous;
-    button.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
-    [button setTitle:@"⚡️ Boost & Cool" forState:UIControlStateNormal];
-    [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    [button addTarget:self action:@selector(boostTapped) forControlEvents:UIControlEventTouchUpInside];
-    button.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [glass.contentView addSubview:button];
-    self.button = button;
-
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panned:)];
-    [card addGestureRecognizer:pan];
-}
-
-- (void)fillWithCPU:(double)cpu memory:(double)mem thermal:(NSInteger)thermal {
-    BOOL hot = thermal >= 2;
-    BOOL cpuHigh = cpu >= cfg.threshold;
-    NSString *title;
-    NSString *symbol;
-    UIColor *tint;
-    if (hot) {
-        title = @"Phone is running hot"; symbol = @"thermometer.high"; tint = UIColor.systemRedColor;
-    } else if (cpuHigh) {
-        title = @"High CPU load"; symbol = @"exclamationmark.triangle.fill"; tint = UIColor.systemOrangeColor;
-    } else {
-        title = @"Memory is almost full"; symbol = @"memorychip"; tint = UIColor.systemOrangeColor;
-    }
-    self.titleLabel.text = title;
-    self.icon.image = [UIImage systemImageNamed:symbol];
-    self.icon.tintColor = tint;
-    NSString *cpuText = cpu >= 0 ? [NSString stringWithFormat:@"%.0f%%", cpu] : @"--";
-    NSString *memText = mem >= 0 ? [NSString stringWithFormat:@"%.0f%%", mem] : @"--";
-    self.detailLabel.text = [NSString stringWithFormat:@"CPU %@  ·  RAM %@  ·  %@", cpuText, memText, NVThermalName(thermal)];
-}
-
-// Position and rotate the card so it is upright for the app in front (games are often landscape).
-- (void)layoutCardAnimated:(BOOL)animated {
-    CGRect screen = UIScreen.mainScreen.bounds;
-    CGFloat W = screen.size.width, H = screen.size.height;
-    NSInteger o = self.orientation;
-    BOOL landscape = (o == 3 || o == 4);
-    CGFloat visualW = landscape ? H : W;
-    CGFloat visualH = landscape ? W : H;
-    CGFloat w = MIN(380, visualW - 24);
-    CGFloat h = 90;
-    BOOL top = cfg.hudPosition == 0;
-    CGFloat margin = top ? (landscape ? 10 : 28) : 14;
-    CGFloat dy = top ? (margin + h / 2 - visualH / 2) : (visualH - margin - h / 2 - visualH / 2);
-
-    CGFloat angle = 0;
-    if (o == 4) angle = -M_PI_2;
-    else if (o == 3) angle = M_PI_2;
-    else if (o == 2) angle = M_PI;
-
-    void (^apply)(void) = ^{
-        self.card.transform = CGAffineTransformIdentity;
-        self.card.bounds = CGRectMake(0, 0, w, h);
-        self.card.center = CGPointMake(W / 2 - dy * sin(angle), H / 2 + dy * cos(angle));
-        self.baseTransform = CGAffineTransformMakeRotation(angle);
-        self.card.transform = self.baseTransform;
-        self.card.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:self.card.bounds cornerRadius:22].CGPath;
-        self.titleLabel.frame = CGRectMake(54, 11, w - 70, 20);
-        self.detailLabel.frame = CGRectMake(54, 31, w - 70, 18);
-        self.button.frame = CGRectMake(16, 54, w - 32, 30);
-    };
-    if (animated) [UIView animateWithDuration:0.3 animations:apply]; else apply();
-}
-
-- (void)followOrientation {
-    if (!self.visible) return;
+    // Sit upright for the app in front (games are often landscape).
     NSInteger o = NVFrontOrientation();
-    if (o != self.orientation) {
-        self.orientation = o;
-        [self layoutCardAnimated:YES];
-    }
-}
+    BOOL landscape = (o == 3 || o == 4);
+    CGFloat visualH = landscape ? W : H;
+    BOOL top = cfg.hudPosition == 0;
+    CGFloat margin = top ? (landscape ? 8 : 26) : 16;
+    CGFloat dy = top ? (margin + h / 2 - visualH / 2) : (visualH - margin - h / 2 - visualH / 2);
+    CGFloat angle = (o == 4) ? -M_PI_2 : (o == 3) ? M_PI_2 : (o == 2) ? M_PI : 0;
+    pill.center = CGPointMake(W / 2 - dy * sin(angle), H / 2 + dy * cos(angle));
+    CGAffineTransform base = CGAffineTransformMakeRotation(angle);
+    pill.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(0.7, 0.7), base);
+    pill.alpha = 0;
 
-- (void)showWithCPU:(double)cpu memory:(double)mem thermal:(NSInteger)thermal {
-    if (self.visible) { [self updateWithCPU:cpu memory:mem thermal:thermal]; return; }
-    if (!self.window) [self buildWindow];
     self.visible = YES;
     self.generation++;
     NSUInteger token = self.generation;
-    self.orientation = NVFrontOrientation();
-    [self.button setTitle:@"⚡️ Boost & Cool" forState:UIControlStateNormal];
-    self.button.enabled = YES;
-    self.button.alpha = 1;
-    [self fillWithCPU:cpu memory:mem thermal:thermal];
-    [self layoutCardAnimated:NO];
-
-    // Spring in from the edge the card is attached to.
-    CGFloat slide = cfg.hudPosition == 0 ? -70 : 70;
-    self.card.alpha = 0;
-    self.card.transform = CGAffineTransformConcat(CGAffineTransformMakeTranslation(0, slide), self.baseTransform);
-    self.window.hidden = NO;
-    [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0.7
+    window.hidden = NO;
+    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.6
                         options:UIViewAnimationOptionAllowUserInteraction
-                     animations:^{
-        self.card.alpha = 1;
-        self.card.transform = self.baseTransform;
-    } completion:nil];
+                     animations:^{ pill.alpha = 1; pill.transform = base; } completion:nil];
 
-    // Leave by itself if the load does not settle.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(cfg.hudDuration * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        if (self.visible && self.generation == token) {
-            gCooldownUntil = CACurrentMediaTime() + kHUDCooldown;
-            [self dismissAnimated:YES];
-        }
+        if (self.visible && self.generation == token) [self hideAnimated:YES];
     });
 }
 
-- (void)updateWithCPU:(double)cpu memory:(double)mem thermal:(NSInteger)thermal {
-    if (!self.visible) return;
-    [self fillWithCPU:cpu memory:mem thermal:thermal];
-    [self followOrientation];
-}
-
-- (void)dismissAnimated:(BOOL)animated {
+- (void)hideAnimated:(BOOL)animated {
     if (!self.visible) return;
     self.visible = NO;
     self.generation++;
+    NVIndicatorWindow *window = self.window;
+    UIView *pill = self.pill;
     void (^finish)(void) = ^{
-        if (self.visible) return;   // shown again in the meantime
-        self.window.hidden = YES;
-        self.window = nil;          // nothing stays alive while there is no HUD
-        self.card = nil;
+        if (self.visible) return;      // a new indicator was shown in the meantime
+        window.hidden = YES;
+        if (self.window == window) { self.window = nil; self.pill = nil; }   // nothing stays alive when idle
     };
     if (!animated) { finish(); return; }
-    CGFloat slide = cfg.hudPosition == 0 ? -60 : 60;
-    [UIView animateWithDuration:0.28 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
-        self.card.alpha = 0;
-        self.card.transform = CGAffineTransformConcat(CGAffineTransformMakeTranslation(0, slide), self.baseTransform);
-    } completion:^(BOOL done) { finish(); }];
-}
-
-- (void)boostTapped {
-    self.generation++;   // cancel the auto-dismiss timer while working
-    NSUInteger token = self.generation;
-    self.button.enabled = NO;
-    self.button.alpha = 0.7;
-    [self.button setTitle:@"Working…" forState:UIControlStateNormal];
-    NVBoostAndCool(^(NSString *summary) {
-        NVHaptic();
-        [self.button setTitle:[@"✓ " stringByAppendingString:summary] forState:UIControlStateNormal];
-        self.button.alpha = 1;
-        gCooldownUntil = CACurrentMediaTime() + kBoostCooldown;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            if (self.visible && self.generation == token) [self dismissAnimated:YES];
-        });
-    });
-}
-
-// Drag the card away (toward its edge or sideways) to dismiss it.
-- (void)panned:(UIPanGestureRecognizer *)pan {
-    CGPoint t = [pan translationInView:self.card];
-    CGFloat edgeSign = cfg.hudPosition == 0 ? -1 : 1;   // local direction of the nearest edge
-    if (pan.state == UIGestureRecognizerStateChanged) {
-        CGFloat dy = edgeSign > 0 ? MAX(t.y, -8) : MIN(t.y, 8);
-        self.card.transform = CGAffineTransformConcat(CGAffineTransformMakeTranslation(t.x * 0.6, dy), self.baseTransform);
-    } else if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
-        CGPoint v = [pan velocityInView:self.card];
-        BOOL towardEdge = edgeSign * t.y > 28 || edgeSign * v.y > 500;
-        BOOL sideways = fabs(t.x) > 90 || fabs(v.x) > 700;
-        if (pan.state == UIGestureRecognizerStateEnded && (towardEdge || sideways)) {
-            gCooldownUntil = CACurrentMediaTime() + kHUDCooldown;
-            [self dismissAnimated:YES];
-        } else {
-            [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0.5
-                                options:0 animations:^{ self.card.transform = self.baseTransform; } completion:nil];
-        }
-    }
+    [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionCurveEaseIn
+                     animations:^{ pill.alpha = 0; } completion:^(BOOL done) { finish(); }];
 }
 
 @end
 
-#pragma mark - Sampling loop
+// The proof shown after a boost: only things that really happened.
+static NSArray<NSString *> *NVProofItems(NVBoostResult r) {
+    NSMutableArray *items = [NSMutableArray array];
+    if (r.memBefore >= 0 && r.memAfter >= 0 && r.memBefore - r.memAfter >= 0.5) {
+        [items addObject:[NSString stringWithFormat:@"RAM %.0f→%.0f%%", r.memBefore, r.memAfter]];
+    }
+    if (r.closed) [items addObject:[NSString stringWithFormat:@"%d app%@ closed", r.closed, r.closed == 1 ? @"" : @"s"]];
+    if (r.paused) [items addObject:[NSString stringWithFormat:@"%d paused", r.paused]];
+    if (r.raised) [items addObject:@"priority up"];
+    return items;
+}
+
+#pragma mark - Sampling loop (automatic, no buttons)
 
 static BOOL gScreenOn = YES;
 static dispatch_source_t gTimer;      // main thread owns it; the handler runs on gQueue
+static NSTimeInterval gInterval;      // current sampling interval
 static int gOverCount, gCalmCount;    // main thread
+static CFTimeInterval gBoostNotBefore;   // main thread: automatic boosts are spaced out
 static NSString *gGamingFront;        // front app that last triggered gaming mode (main thread)
+
+static void NVSetInterval(NSTimeInterval interval) {
+    if (!gTimer || interval == gInterval) return;
+    gInterval = interval;
+    // Big leeway lets the system batch our wake-ups with its own, which keeps the battery cost near zero.
+    dispatch_source_set_timer(gTimer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)),
+                              (uint64_t)(interval * NSEC_PER_SEC), (uint64_t)(interval * 0.5 * NSEC_PER_SEC));
+}
+
+static void NVAutoBoost(void) {
+    gBoostNotBefore = CACurrentMediaTime() + kBoostCooldown;
+    NVBoostAndCool(^(NVBoostResult r) {
+        if (!gScreenOn) return;
+        [NVIndicator.shared showItems:NVProofItems(r)];   // stays silent when nothing changed
+    });
+}
 
 // Called on the main thread with every sample.
 static void NVHandleSample(double cpu, double mem, NSInteger thermal) {
     if (!gScreenOn || !cfg.enabled) return;
-
-    NVHUD *hud = NVHUD.shared;
-    [hud followOrientation];
 
     // Gaming Optimization Mode: boost once when a game or call app comes to the front, keep daemons paused.
     NSString *front = NVFrontBundleID();
@@ -679,9 +594,7 @@ static void NVHandleSample(double cpu, double mem, NSInteger thermal) {
         gGamingFront = front;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kGamingBoostDelay * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            if (gScreenOn && cfg.enabled && [NVFrontBundleID() isEqualToString:front]) {
-                NVBoostAndCool(nil);
-            }
+            if (gScreenOn && cfg.enabled && [NVFrontBundleID() isEqualToString:front]) NVAutoBoost();
         });
     } else if (!gameFront && gGamingFront) {
         gGamingFront = nil;
@@ -696,17 +609,17 @@ static void NVHandleSample(double cpu, double mem, NSInteger thermal) {
         });
     }
 
-    BOOL memHigh = cfg.warnMemory && mem >= kMemoryLimit;
-    BOOL over = (cpu >= cfg.threshold) || memHigh || thermal >= 2;
+    BOOL over = (cpu >= cfg.threshold) || (cfg.warnMemory && mem >= kMemoryLimit) || thermal >= 2;
     BOOL calm = (cpu < cfg.threshold - 10) && !(cfg.warnMemory && mem >= kMemoryLimit - 4) && thermal < 2;
     if (over) { gOverCount++; gCalmCount = 0; }
     else { gOverCount = 0; gCalmCount = calm ? gCalmCount + 1 : 0; }
 
-    if (hud.visible) {
-        [hud updateWithCPU:cpu memory:mem thermal:thermal];
-        if (gCalmCount >= kCalmChecksNeeded && !gBoosting) [hud dismissAnimated:YES];   // load stabilised
-    } else if (gOverCount >= kOverChecksNeeded && CACurrentMediaTime() > gCooldownUntil) {
-        [hud showWithCPU:cpu memory:mem thermal:thermal];
+    // Quiet phone: check less often. Busy phone: check more often.
+    NVSetInterval(gCalmCount >= kCalmChecksForSlow ? kPollSlow : kPollFast);
+
+    if (gOverCount >= kOverChecksNeeded && !gBoosting && CACurrentMediaTime() > gBoostNotBefore) {
+        gOverCount = 0;
+        NVAutoBoost();
     }
 }
 
@@ -727,10 +640,10 @@ static void NVStartTelemetry(void) {
     dispatch_async(gQueue, ^{ NVCPULoad(YES); });   // forget the counters from before the screen turned off
     gOverCount = gCalmCount = 0;
     dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, gQueue);
-    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kPollInterval * NSEC_PER_SEC)),
-                              (uint64_t)(kPollInterval * NSEC_PER_SEC), (uint64_t)(0.25 * NSEC_PER_SEC));
-    dispatch_source_set_event_handler(timer, ^{ NVPoll(); });
     gTimer = timer;
+    gInterval = 0;
+    dispatch_source_set_event_handler(timer, ^{ NVPoll(); });
+    NVSetInterval(kPollFast);
     dispatch_resume(timer);
 }
 
@@ -743,10 +656,10 @@ static void NVStopTelemetry(void) {
     gGamingFront = nil;
 }
 
-// Everything NovaShield started is wound down: no timer, no HUD, no paused daemons.
+// Everything NovaShield started is wound down: no timer, no indicator, no paused daemons.
 static void NVShutDownEverything(void) {
     NVStopTelemetry();
-    [NVHUD.shared dismissAnimated:NO];
+    [NVIndicator.shared hideAnimated:NO];
     dispatch_async(gQueue, ^{ NVResumeDaemons(); });
 }
 
@@ -797,8 +710,7 @@ static void NVInit(void) {
 
         notify_register_dispatch(NV_NOTIFY_TESTHUD, &gTestToken, main, ^(int token) {
             NVLoadConfig();
-            double cpu = MIN(99, MAX(cfg.threshold + 8, 88));
-            [NVHUD.shared showWithCPU:cpu memory:93 thermal:1];
+            [NVIndicator.shared showItems:@[@"RAM 93→88%", @"2 apps closed", @"4 paused"]];
         });
 
         notify_register_dispatch(NV_NOTIFY_RESPRING, &gRespringToken, main, ^(int token) { NVRespring(); });

@@ -11,16 +11,18 @@ Rootless tweak for iOS 15+ (Dopamine / palera1n rootless), made for the iPhone 7
 
 ## What it does
 
+NovaShield is fully automatic. There is no dialog, no button and nothing to tap.
+
 | Feature | How it works |
 | --- | --- |
-| **Zero standby drain** | Listens to `com.apple.springboard.hasBlankedScreen`. When the screen turns off the sampling timer is cancelled, the HUD is removed and anything NovaShield paused is resumed. Nothing runs or is scheduled while locked. |
-| **Live telemetry** | While the screen is on, every 2.5 s: CPU load from `host_statistics` tick deltas, memory saturation from `host_statistics64`, and `NSProcessInfo.thermalState`. The sampler runs on a utility queue so it never competes with a game. |
-| **Glass warning HUD** | After 3 high checks in a row (about 8 s) a blurred, continuous-corner card springs in at the top or bottom. It follows the front app's orientation (landscape games), closes with a swipe, and leaves by itself when the load settles or after your chosen time. |
-| **Boost & Cool** | One tap, with a haptic when finished. See below. |
+| **Zero standby drain** | Listens to `com.apple.springboard.hasBlankedScreen`. When the screen turns off the timer is cancelled, the indicator is removed and anything NovaShield paused is resumed. Nothing runs or is scheduled while locked. |
+| **Quiet monitoring** | While the screen is on: CPU load (`host_statistics` deltas), memory saturation (`host_statistics64`) and thermal state, every 5 s, slowing to every 10 s once the phone has been calm. Low-priority queue and a wide timer leeway so wake-ups are batched with the system's own. |
+| **Auto Boost** | If the CPU, memory or temperature stays high for about 10 s, it runs Boost & Cool by itself, at most once every 90 s. |
+| **Tick indicator** | After a boost that really changed something, a tiny liquid-glass pill with green ticks shows the proof for 2.5 s, for example `✓ RAM 93→88%   ✓ 2 apps closed   ✓ 4 paused`. If nothing changed, nothing is shown. Touches pass through it, and it turns upright for landscape games. |
 | **Gaming Optimization Mode** | Boosts about 5 s after Mobile Legends, Telegram or FaceTime come to the front and keeps daemons paused while they stay in front. |
-| **Settings pane** | Master switch, CPU threshold (60 to 95 %), memory warning, gaming mode, what Boost & Cool does, HUD position and time, Test HUD, reset and respring. |
+| **Settings pane** | Master switch, CPU threshold (60 to 95 %), memory reaction, gaming mode, what the boost does, tick indicator on/off, position and time, Test Indicator, reset and respring. |
 
-### Boost & Cool
+### What the boost does
 
 1. Clears memory caches in SpringBoard (`malloc_zone_pressure_relief`, URL cache, memory warning).
 2. Closes background apps that are safe to close. It never closes the front app, calls, FaceTime, music or anything playing, navigation, Telegram, WhatsApp and similar chat apps, or most Apple apps.
@@ -30,7 +32,7 @@ Rootless tweak for iOS 15+ (Dopamine / palera1n rootless), made for the iPhone 7
 ## Honest limits
 
 - SpringBoard runs as the `mobile` user. NovaShield **cannot** touch root daemons such as `thermalmonitord`, change kernel thermal management or fix I2C bus hangs. It lowers the load that triggers them.
-- Raising another app's priority is normally refused by iOS for unprivileged processes. The summary on the HUD says "priority raised" only when it actually worked.
+- Raising another app's priority is normally refused by iOS for unprivileged processes. The indicator shows "priority up" only when it actually worked.
 - The memory warning level (92 % saturation) and the paused-daemon list are sensible defaults, not measurements from your device.
 - It uses private SpringBoard APIs looked up at runtime, so an action may quietly do nothing on an iOS version where they changed.
 - Mobile Legends and Telegram bundle IDs can differ by region. To change the list, write an array of bundle IDs to the `gamingApps` key in `com.kwarnu.novashield`.
@@ -48,18 +50,19 @@ Settings > NovaShield
 | Setting | Default |
 | --- | --- |
 | Enable NovaShield | On |
-| CPU Warning Threshold | 80 % |
-| Warn on High Memory Use | On |
+| CPU Threshold | 80 % |
+| Also React to High Memory | On |
 | Gaming Optimization Mode | On |
 | Close Background Apps | On |
 | Pause Background Daemons | On |
-| HUD Position | Top |
-| HUD Auto-dismiss | 8 s |
+| Show Tick Indicator | On |
+| Indicator Position | Top |
+| Indicator Time | 2.5 s |
 
 ## Architecture
 
 ```
-Tweak.m                       SpringBoard tweak (screen state, telemetry, HUD, rescue)
+Tweak.m                       SpringBoard tweak (screen state, telemetry, auto boost, tick indicator)
 NovaShield.plist              MobileSubstrate filter (SpringBoard only)
 prefs/                        PreferenceLoader bundle (Root.plist + list controller)
 layout/                       PreferenceLoader entry and icons

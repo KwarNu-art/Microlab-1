@@ -8,7 +8,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Performance and thermal rescue. NovaShield only works while the screen is on and does nothing at all while it is off, so standby battery is untouched.</string>
+			<string>Fully automatic. It checks quietly while the screen is on, rescues the phone by itself when it lags or gets hot, and does nothing at all while the screen is off.</string>
 			<key>label</key>
 			<string>NovaShield</string>
 		</dict>
@@ -30,9 +30,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>The warning appears when the CPU stays above this load for 3 checks in a row (about 8 seconds). Lower = warns sooner.</string>
+			<string>Auto boost starts when the CPU stays above this load for about 10 seconds. Lower = reacts sooner.</string>
 			<key>label</key>
-			<string>CPU Warning Threshold</string>
+			<string>CPU Threshold</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -66,13 +66,13 @@
 			<key>key</key>
 			<string>warnMemory</string>
 			<key>label</key>
-			<string>Warn on High Memory Use</string>
+			<string>Also React to High Memory</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Boosts automatically a few seconds after you open Mobile Legends, Telegram or FaceTime, and keeps background analysis daemons paused while they are in front. They are resumed when you leave or lock the screen.</string>
+			<string>Boosts automatically a few seconds after Mobile Legends, Telegram or FaceTime open, and keeps background analysis daemons paused while they are in front.</string>
 			<key>label</key>
 			<string>Gaming Optimization</string>
 		</dict>
@@ -94,9 +94,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>What the Boost &amp; Cool button does. Memory caches are always cleared. Calls, music, navigation and chat apps are never closed.</string>
+			<string>Memory caches are always cleared. Calls, music, navigation and chat apps are never closed.</string>
 			<key>label</key>
-			<string>Boost &amp; Cool Actions</string>
+			<string>What the Auto Boost Does</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -130,9 +130,23 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Where the floating warning appears and how long it stays if the load does not settle.</string>
+			<string>A tiny glass pill with green ticks appears for a moment after a boost that really changed something, as proof. It never asks for a tap and touches pass through it.</string>
 			<key>label</key>
-			<string>Warning HUD</string>
+			<string>Tick Indicator</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.kwarnu.novashield/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.kwarnu.novashield</string>
+			<key>key</key>
+			<string>showIndicator</string>
+			<key>label</key>
+			<string>Show Tick Indicator</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -164,7 +178,7 @@
 			<key>cell</key>
 			<string>PSSliderCell</string>
 			<key>default</key>
-			<integer>8</integer>
+			<real>2.5</real>
 			<key>defaults</key>
 			<string>com.kwarnu.novashield</string>
 			<key>isSegmented</key>
@@ -172,9 +186,9 @@
 			<key>key</key>
 			<string>hudDuration</string>
 			<key>max</key>
-			<integer>30</integer>
+			<integer>6</integer>
 			<key>min</key>
-			<integer>3</integer>
+			<real>1.5</real>
 			<key>showValue</key>
 			<true/>
 		</dict>
@@ -184,7 +198,7 @@
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
-			<string>Test HUD</string>
+			<string>Test Indicator</string>
 		</dict>
 		<dict>
 			<key>cell</key>
