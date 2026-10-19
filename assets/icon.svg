@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <clipPath id="clip"><rect width="1024" height="1024" rx="232"/></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1b4d"/>
+      <stop offset="0.55" stop-color="#2a3fd1"/>
+      <stop offset="1" stop-color="#27c4ff"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.45" r="0.55">
+      <stop offset="0" stop-color="#8fe9ff" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#8fe9ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#cfeaff"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffd94a"/>
+      <stop offset="1" stop-color="#ff8a2a"/>
+    </linearGradient>
+    <filter id="drop" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="22" stdDeviation="24" flood-color="#04103a" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+  <g clip-path="url(#clip)">
+    <rect width="1024" height="1024" fill="url(#bg)"/>
+    <circle cx="512" cy="470" r="470" fill="url(#glow)"/>
+    <!-- frost rings: cool-down -->
+    <circle cx="512" cy="500" r="400" fill="none" stroke="#fff" stroke-opacity="0.16" stroke-width="14"/>
+    <circle cx="512" cy="500" r="330" fill="none" stroke="#fff" stroke-opacity="0.12" stroke-width="10"/>
+    <!-- shield -->
+    <path d="M512 150 C612 205 716 228 806 232 C806 470 770 690 512 874 C254 690 218 470 218 232 C308 228 412 205 512 150Z"
+          fill="url(#shield)" filter="url(#drop)"/>
+    <path d="M512 196 C598 244 686 266 764 272 C760 468 728 650 512 818 C296 650 264 468 260 272 C338 266 426 244 512 196Z"
+          fill="#1c2fb0" fill-opacity="0.92"/>
+    <!-- lightning bolt -->
+    <path d="M560 262 L388 536 L494 536 L452 770 L644 468 L536 468 Z" fill="url(#bolt)" stroke="#fff" stroke-width="12" stroke-linejoin="round"/>
+    <!-- snowflake sparkle (cool) -->
+    <g stroke="#fff" stroke-width="12" stroke-linecap="round" fill="none" transform="translate(850 175)">
+      <path d="M0 -44 V44 M-38 -22 L38 22 M-38 22 L38 -22"/>
+    </g>
+    <g fill="#fff">
+      <circle cx="240" cy="180" r="8" opacity="0.9"/>
+      <circle cx="860" cy="760" r="9" opacity="0.8"/>
+      <circle cx="170" cy="700" r="7" opacity="0.7"/>
+      <path d="M848 420 l8 22 22 8 -22 8 -8 22 -8 -22 -22 -8 22 -8z" opacity="0.9"/>
+      <path d="M190 470 l7 19 19 7 -19 7 -7 19 -7 -19 -19 -7 19 -7z" opacity="0.85"/>
+    </g>
+  </g>
+</svg>

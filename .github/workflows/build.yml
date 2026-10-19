@@ -1,0 +1,89 @@
+name: Build NovaShield
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Build Dependencies
+        shell: bash
+        run: |
+          brew install ldid dpkg
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+      - name: Install Theos and iOS SDKs
+        shell: bash
+        run: |
+          THEOS_DIR="${RUNNER_TEMP}/theos"
+          rm -rf "$THEOS_DIR"
+          git clone --recursive --depth=1 https://github.com/theos/theos.git "$THEOS_DIR"
+          rm -rf "$THEOS_DIR/sdks"
+          git clone --depth=1 https://github.com/theos/sdks.git "$THEOS_DIR/sdks"
+          ls "$THEOS_DIR/sdks"
+          echo "THEOS=$THEOS_DIR" >> "$GITHUB_ENV"
+
+      - name: Build Rootless Package (Dopamine / palera1n rootless)
+        shell: bash
+        run: |
+          make clean || true
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+
+      - name: Verify package contents
+        shell: bash
+        run: |
+          set -e
+          rm -rf verify && mkdir -p verify/x verify/ctl
+          deb=$(ls packages/*.deb | head -1)
+          echo "== $deb"
+          dpkg-deb -x "$deb" verify/x
+          dpkg-deb -e "$deb" verify/ctl
+          grep -q "^Architecture: iphoneos-arm64" verify/ctl/control || { echo "not a rootless package"; exit 1; }
+          test -f verify/x/var/jb/Library/MobileSubstrate/DynamicLibraries/NovaShield.dylib || { echo "tweak dylib missing"; exit 1; }
+          test -f verify/x/var/jb/Library/MobileSubstrate/DynamicLibraries/NovaShield.plist || { echo "tweak filter missing"; exit 1; }
+          test -f verify/x/var/jb/Library/PreferenceBundles/NovaShieldPrefs.bundle/NovaShieldPrefs || { echo "settings binary missing"; exit 1; }
+          test -f verify/x/var/jb/Library/PreferenceBundles/NovaShieldPrefs.bundle/Root.plist || { echo "Root.plist missing"; exit 1; }
+          test -f verify/x/var/jb/Library/PreferenceLoader/Preferences/NovaShield.plist || { echo "PreferenceLoader entry missing"; exit 1; }
+          plutil -lint verify/x/var/jb/Library/PreferenceBundles/NovaShieldPrefs.bundle/Root.plist
+          cat verify/ctl/control
+
+      - name: Collect DEB file
+        shell: bash
+        run: |
+          mkdir -p output_deb
+          find packages -name "*.deb" -exec cp {} output_deb/ \;
+          ls -la output_deb/
+
+      - name: Upload DEB Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NovaShield-deb
+          path: output_deb/*.deb
+          if-no-files-found: error
+
+      - name: Read package version
+        id: ver
+        shell: bash
+        run: echo "version=$(grep '^Version:' control | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to GitHub Releases
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: NovaShield ${{ steps.ver.outputs.version }}
+          body: |
+            Rootless package for Dopamine and palera1n (rootless), iOS 15.0 and later.
+            Install the `.deb` with Sileo, Zebra or Filza, then respring.
+          files: output_deb/*.deb

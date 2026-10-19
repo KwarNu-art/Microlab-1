@@ -1,0 +1,36 @@
+{
+  "minVersion": "0.1",
+  "class": "DepictionTabView",
+  "tintColor": "#4a63ff",
+  "headerImage": "https://raw.githubusercontent.com/KwarNu-art/Microlab-1/main/assets/banner.png",
+  "tabs": [
+    {
+      "tabname": "Details",
+      "class": "DepictionStackView",
+      "views": [
+        {"class": "DepictionHeaderView", "title": "Lag, heat and memory rescue", "useBoldText": true, "useBottomMargin": false},
+        {"class": "DepictionMarkdownView", "useSpacing": true, "markdown": "NovaShield watches your iPhone while the screen is on. When the CPU stays too busy, memory fills up or the phone gets hot, a small glass warning appears with a **⚡️ Boost & Cool** button.\n\nBuilt for the iPhone 7 Plus (A10) on iOS 15.8.x with a rootless jailbreak, and works on any arm64 device on iOS 15 or later."},
+        {"class": "DepictionSeparatorView"},
+        {"class": "DepictionHeaderView", "title": "Features"},
+        {"class": "DepictionMarkdownView", "useSpacing": true, "markdown": "**Zero standby drain**\nWhen the screen turns off, the sampling timer is cancelled and nothing runs. Anything NovaShield paused is resumed first.\n\n**Live telemetry**\nCPU load, memory use and thermal state, checked every 2.5 seconds while the screen is on.\n\n**Glass warning HUD**\nBlurred, rounded, spring animated, at the top or bottom. It turns to match landscape games, closes by swiping, and goes away by itself when the load settles.\n\n**Boost & Cool**\nClears memory caches, closes safe background apps, pauses background analysis daemons for a while and tries to raise the foreground app's priority, with a haptic tap when done.\n\n**Gaming Optimization Mode**\nBoosts a few seconds after Mobile Legends, Telegram or FaceTime open, and keeps daemons paused while they are in front.\n\n**Full Settings pane**\nMaster switch, CPU threshold (60 to 95 percent), HUD position and time, and a Test HUD button."},
+        {"class": "DepictionSeparatorView"},
+        {"class": "DepictionHeaderView", "title": "Honest limits"},
+        {"class": "DepictionMarkdownView", "useSpacing": true, "markdown": "NovaShield cannot change kernel thermal management, the I2C bus or root daemons such as `thermalmonitord`. It lowers the load that triggers them. Calls, music, navigation and chat apps are never closed."},
+        {"class": "DepictionSeparatorView"},
+        {"class": "DepictionTableTextView", "title": "Requires", "text": "iOS 15.0 or later, rootless"},
+        {"class": "DepictionTableTextView", "title": "Architecture", "text": "iphoneos-arm64"},
+        {"class": "DepictionTableTextView", "title": "Developer", "text": "KwarNu"},
+        {"class": "DepictionTableButtonView", "title": "Source code", "action": "https://github.com/KwarNu-art/Microlab-1", "openExternal": "true"},
+        {"class": "DepictionSpacerView", "spacing": 12}
+      ]
+    },
+    {
+      "tabname": "Changelog",
+      "class": "DepictionStackView",
+      "views": [
+        {"class": "DepictionSubheaderView", "title": "1.0.0", "useBoldText": true},
+        {"class": "DepictionMarkdownView", "useSpacing": true, "markdown": "- First release: telemetry, glass HUD, Boost & Cool, Gaming Optimization Mode and the Settings pane."}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+Package: com.kwarnu.novashield
+Name: NovaShield
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: Performance and thermal rescue for lag, heat and memory pressure, with a one-tap Boost and Cool.
+Maintainer: KwarNu <kwarnu64@gmail.com>
+Author: KwarNu
+Section: Tweaks
+Depends: mobilesubstrate, preferenceloader, firmware (>= 15.0)
+Icon: https://raw.githubusercontent.com/KwarNu-art/Microlab-1/main/assets/icon.png
+Depiction: https://github.com/KwarNu-art/Microlab-1
+SileoDepiction: https://raw.githubusercontent.com/KwarNu-art/Microlab-1/main/depictions/native/com.kwarnu.novashield.json
